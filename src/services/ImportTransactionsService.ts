@@ -10,7 +10,7 @@ interface Request {
   fileName: string;
 }
 
-interface CSVTransaction {
+interface TransactionDTO {
   title: string;
   type: 'income' | 'outcome';
   value: number;
@@ -30,7 +30,7 @@ class ImportTransactionsService {
 
     const parseCSV = contactsReadStream.pipe(parsers);
 
-    const transactions: CSVTransaction[] = [];
+    const transactions: TransactionDTO[] = [];
     const categories: string[] = [];
 
     parseCSV.on('data', async line => {
@@ -47,13 +47,42 @@ class ImportTransactionsService {
 
     await new Promise(resolve => parseCSV.on('end', resolve));
 
-    const createdTransactions: Transaction[] = [];
-
-    await transactions.map(async transaction => {
-      const t = await transactionService.execute(transaction);
-
-      createdTransactions.push(t);
+    const existentCategories = await categoriesRepository.find({
+      where: {
+        title: In(categories),
+      },
     });
+
+    const existentCategoriesTitles = existentCategories.map(
+      (category: Category) => category.title,
+    );
+
+    const addCategoryTitles = categories
+      .filter(category => !existentCategoriesTitles.includes(category))
+      .filter((value, index, self) => self.indexOf(value) === index);
+
+    const newCategories = categoriesRepository.create(
+      addCategoryTitles.map(title => ({
+        title,
+      })),
+    );
+
+    await categoriesRepository.save(newCategories);
+
+    const finalCategories = [...newCategories, ...existentCategories];
+
+    const createdTransactions = transactionRepository.create(
+      transactions.map(transaction => ({
+        title: transaction.title,
+        type: transaction.type,
+        value: transaction.value,
+        category: finalCategories.find(
+          category => category.title === transaction.category,
+        ),
+      })),
+    );
+
+    await transactionRepository.save(createdTransactions);
 
     return createdTransactions;
   }
